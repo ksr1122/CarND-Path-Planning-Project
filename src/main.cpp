@@ -8,6 +8,8 @@
 #include "helpers.h"
 #include "json.hpp"
 
+#include "spline.h"
+
 // for convenience
 using nlohmann::json;
 using std::string;
@@ -199,6 +201,48 @@ int main() {
             ptsy[i] = shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw);
           }
 
+          // 4. Fitting the spline
+          tk::spline s;
+          s.set_points(ptsx, ptsy);
+
+          vector<double> next_x_vals;
+          vector<double> next_y_vals;
+
+          for (int i=0;i<prev_size;i++) {
+            next_x_vals.push_back(previous_path_x[i]);
+            next_y_vals.push_back(previous_path_y[i]);
+          }
+
+          double target_x = SPACE_PTS;
+          double target_y = s(target_x);
+          double target_dist = sqrt(target_x*target_x + target_y*target_y);
+
+          for(int i=1;i<PATH_SIZE-prev_size;i++) {
+            ref_vel += vel_off;
+            if (ref_vel > max_speed) {
+              ref_vel = max_speed;
+            } else if (ref_vel < (MPH2MPS/10.0)) {
+              ref_vel = MPH2MPS/10.0;
+            }
+            double N = target_dist/(TIME_FRAME*ref_vel/MPH2MPS);
+
+            double x_point = i * target_x/N;
+            double y_point = s(x_point);
+
+            double x_ref = x_point;
+            double y_ref = y_point;
+
+            x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
+            y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
+
+            x_point += ref_x;
+            y_point += ref_y;
+
+            next_x_vals.push_back(x_point);
+            next_y_vals.push_back(y_point);
+          }
+          
+          json msgJson;
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
 
