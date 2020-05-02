@@ -156,6 +156,49 @@ int main() {
             }
           }
 
+          // 3. Compute waypoints for trajectory
+          vector<double> ptsx;
+          vector<double> ptsy;
+
+          double ref_x = car_x;
+          double ref_y = car_y;
+          double ref_yaw = deg2rad(car_yaw);
+			
+          double ref_x_prev = 0;
+          double ref_y_prev = 0;
+
+          if (prev_size < 2) {
+            ref_x_prev = car_x - cos(car_yaw);
+            ref_y_prev = car_y - sin(car_yaw);
+          } else {
+            ref_x = previous_path_x[prev_size - 1];
+            ref_y = previous_path_y[prev_size - 1];
+
+            ref_x_prev = previous_path_x[prev_size - 2];
+            ref_y_prev = previous_path_y[prev_size - 2];
+            ref_yaw = atan2(ref_y-ref_y_prev, ref_x-ref_x_prev);
+          }
+
+          ptsx.push_back(ref_x_prev);
+          ptsy.push_back(ref_y_prev);
+
+          ptsx.push_back(ref_x);
+          ptsy.push_back(ref_y);
+
+          for (int i=0;i<3;i++) {
+            vector<double> next_wp = getXY(car_s+((i+1)*SPACE_PTS), 2+(LANE_WIDTH*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            ptsx.push_back(next_wp[0]);
+            ptsy.push_back(next_wp[1]);
+          }
+
+          for (int i=0;i<ptsx.size();i++) {
+            double shift_x = ptsx[i] - ref_x;
+            double shift_y = ptsy[i] - ref_y;
+
+            ptsx[i] = shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw);
+            ptsy[i] = shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw);
+          }
+
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
 
