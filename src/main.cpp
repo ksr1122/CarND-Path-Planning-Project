@@ -49,9 +49,13 @@ int main() {
     map_waypoints_dx.push_back(d_x);
     map_waypoints_dy.push_back(d_y);
   }
-
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
-               &map_waypoints_dx,&map_waypoints_dy]
+  
+  int lane = 1;
+  double ref_vel = 0;
+  double max_speed = 0;
+  
+  h.onMessage([&ref_vel, &lane, &max_speed,
+               &map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -88,16 +92,46 @@ int main() {
           //   of the road.
           auto sensor_fusion = j[1]["sensor_fusion"];
 
-          json msgJson;
-
-          vector<double> next_x_vals;
-          vector<double> next_y_vals;
-
           /**
            * TODO: define a path made up of (x,y) points that the car will visit
            *   sequentially every .02 seconds
            */
 
+          const int SPACE_PTS = 30;
+          const int PATH_SIZE = 50;
+          const int LANE_WIDTH = 4;
+
+          const double MPH2MPS = 2.24;
+          const double SPEED_LIMIT = 47;
+          const double TIME_FRAME = 0.02;
+
+          int prev_size = previous_path_x.size();
+
+          if (prev_size > 0) {
+            car_s = end_path_s;
+          }
+
+          bool too_close = false;
+          bool car_left = false, car_right = false;
+
+          // 1. Detect nearby cars
+          for (size_t i=0;i<sensor_fusion.size();i++) {
+            double d = sensor_fusion[i][6];
+            double vx = sensor_fusion[i][3];
+            double vy = sensor_fusion[i][4];
+            double check_speed = sqrt(vx*vx+vy*vy);
+            double check_car_s = sensor_fusion[i][5];
+
+            int check_lane = (d+1)/LANE_WIDTH;
+            check_car_s += ((double)prev_size*TIME_FRAME*check_speed);
+            if (((check_car_s > car_s) && ((check_car_s - car_s) < SPACE_PTS)) && (check_lane == lane)) {
+              too_close = true;
+            } else if ((fabs(check_car_s - car_s) < SPACE_PTS) && (check_lane < lane)) {
+              car_left = true;
+            } else if ((fabs(check_car_s - car_s) < SPACE_PTS) && (check_lane > lane)) {
+              car_right = true;
+            }
+          }
 
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
