@@ -133,6 +133,29 @@ int main() {
             }
           }
 
+          // 2. Calcluate velocity offset
+          double vel_off = 0;
+          if (too_close) {
+            if (!car_left && (lane > 0)) {
+              lane--;
+            } else if (!car_right && (lane != 2)) {
+              lane++;
+            }
+            vel_off = -MPH2MPS/10.0;
+          } else {
+            if (lane != 1) {
+              if (((lane == 0) && !car_right) || ((lane == 2) && !car_left)) {
+                lane = 1;
+              }
+            }
+            if (ref_vel < max_speed) {
+              vel_off = MPH2MPS/10.0;
+            }
+            if (max_speed < SPEED_LIMIT) {
+              max_speed += SPEED_LIMIT/10;
+            }
+          }
+
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
 
