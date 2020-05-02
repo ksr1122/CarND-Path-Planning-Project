@@ -8,6 +8,8 @@
 #include "helpers.h"
 #include "json.hpp"
 
+#include "spline.h"
+
 // for convenience
 using nlohmann::json;
 using std::string;
@@ -49,9 +51,13 @@ int main() {
     map_waypoints_dx.push_back(d_x);
     map_waypoints_dy.push_back(d_y);
   }
-
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
-               &map_waypoints_dx,&map_waypoints_dy]
+  
+  int lane = 1;
+  double ref_vel = 0;
+  double max_speed = 0;
+  
+  h.onMessage([&ref_vel, &lane, &max_speed,
+               &map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -88,17 +94,155 @@ int main() {
           //   of the road.
           auto sensor_fusion = j[1]["sensor_fusion"];
 
-          json msgJson;
-
-          vector<double> next_x_vals;
-          vector<double> next_y_vals;
-
           /**
            * TODO: define a path made up of (x,y) points that the car will visit
            *   sequentially every .02 seconds
            */
 
+          const int SPACE_PTS = 30;
+          const int PATH_SIZE = 50;
+          const int LANE_WIDTH = 4;
 
+          const double MPH2MPS = 2.24;
+          const double SPEED_LIMIT = 47;
+          const double TIME_FRAME = 0.02;
+
+          int prev_size = previous_path_x.size();
+
+          if (prev_size > 0) {
+            car_s = end_path_s;
+          }
+
+          bool too_close = false;
+          bool car_left = false, car_right = false;
+
+          // 1. Detect nearby cars
+          for (size_t i=0;i<sensor_fusion.size();i++) {
+            double d = sensor_fusion[i][6];
+            double vx = sensor_fusion[i][3];
+            double vy = sensor_fusion[i][4];
+            double check_speed = sqrt(vx*vx+vy*vy);
+            double check_car_s = sensor_fusion[i][5];
+
+            int check_lane = (d+1)/LANE_WIDTH;
+            check_car_s += ((double)prev_size*TIME_FRAME*check_speed);
+            if (((check_car_s > car_s) && ((check_car_s - car_s) < SPACE_PTS)) && (check_lane == lane)) {
+              too_close = true;
+            } else if ((fabs(check_car_s - car_s) < SPACE_PTS) && (check_lane < lane)) {
+              car_left = true;
+            } else if ((fabs(check_car_s - car_s) < SPACE_PTS) && (check_lane > lane)) {
+              car_right = true;
+            }
+          }
+
+          // 2. Calcluate velocity offset
+          double vel_off = 0;
+          if (too_close) {
+            if (!car_left && (lane > 0)) {
+              lane--;
+            } else if (!car_right && (lane != 2)) {
+              lane++;
+            }
+            vel_off = -MPH2MPS/10.0;
+          } else {
+            if (lane != 1) {
+              if (((lane == 0) && !car_right) || ((lane == 2) && !car_left)) {
+                lane = 1;
+              }
+            }
+            if (ref_vel < max_speed) {
+              vel_off = MPH2MPS/10.0;
+            }
+            if (max_speed < SPEED_LIMIT) {
+              max_speed += SPEED_LIMIT/10;
+            }
+          }
+
+          // 3. Compute waypoints for trajectory
+          vector<double> ptsx;
+          vector<double> ptsy;
+
+          double ref_x = car_x;
+          double ref_y = car_y;
+          double ref_yaw = deg2rad(car_yaw);
+			
+          double ref_x_prev = 0;
+          double ref_y_prev = 0;
+
+          if (prev_size < 2) {
+            ref_x_prev = car_x - cos(car_yaw);
+            ref_y_prev = car_y - sin(car_yaw);
+          } else {
+            ref_x = previous_path_x[prev_size - 1];
+            ref_y = previous_path_y[prev_size - 1];
+
+            ref_x_prev = previous_path_x[prev_size - 2];
+            ref_y_prev = previous_path_y[prev_size - 2];
+            ref_yaw = atan2(ref_y-ref_y_prev, ref_x-ref_x_prev);
+          }
+
+          ptsx.push_back(ref_x_prev);
+          ptsy.push_back(ref_y_prev);
+
+          ptsx.push_back(ref_x);
+          ptsy.push_back(ref_y);
+
+          for (int i=0;i<3;i++) {
+            vector<double> next_wp = getXY(car_s+((i+1)*SPACE_PTS), 2+(LANE_WIDTH*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            ptsx.push_back(next_wp[0]);
+            ptsy.push_back(next_wp[1]);
+          }
+
+          for (int i=0;i<ptsx.size();i++) {
+            double shift_x = ptsx[i] - ref_x;
+            double shift_y = ptsy[i] - ref_y;
+
+            ptsx[i] = shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw);
+            ptsy[i] = shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw);
+          }
+
+          // 4. Fitting the spline
+          tk::spline s;
+          s.set_points(ptsx, ptsy);
+
+          vector<double> next_x_vals;
+          vector<double> next_y_vals;
+
+          for (int i=0;i<prev_size;i++) {
+            next_x_vals.push_back(previous_path_x[i]);
+            next_y_vals.push_back(previous_path_y[i]);
+          }
+
+          double target_x = SPACE_PTS;
+          double target_y = s(target_x);
+          double target_dist = sqrt(target_x*target_x + target_y*target_y);
+
+          for(int i=1;i<PATH_SIZE-prev_size;i++) {
+            ref_vel += vel_off;
+            if (ref_vel > max_speed) {
+              ref_vel = max_speed;
+            } else if (ref_vel < (MPH2MPS/10.0)) {
+              ref_vel = MPH2MPS/10.0;
+            }
+            double N = target_dist/(TIME_FRAME*ref_vel/MPH2MPS);
+
+            double x_point = i * target_x/N;
+            double y_point = s(x_point);
+
+            double x_ref = x_point;
+            double y_ref = y_point;
+
+            x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
+            y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
+
+            x_point += ref_x;
+            y_point += ref_y;
+
+            next_x_vals.push_back(x_point);
+            next_y_vals.push_back(y_point);
+          }
+          
+          json msgJson;
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
 
